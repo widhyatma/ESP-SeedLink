@@ -2,7 +2,9 @@
 
 #include <Arduino.h>
 #include <math.h>
+#if __has_include("config.h")
 #include "config.h"
+#endif
 
 // ==============================================================================
 // MULTI-CHANNEL REALISTIC SEISMIC SENSOR SIMULATOR (FDSN MULTI-RATE: E, B, S)

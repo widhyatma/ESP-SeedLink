@@ -14,14 +14,19 @@ Gunakan panduan ini untuk mengoperasikan, menguji, memantau, dan mengembangkan f
 
 ## 1. Verifikasi & Kompilasi Firmware ESP32
 
-Proyek ini dibangun menggunakan PlatformIO dengan kerangka kerja Arduino di atas mikrokontroler ESP32.
+Proyek ini dibangun menggunakan PlatformIO dengan kerangka kerja Arduino di atas mikrokontroler ESP32, menyediakan dua lingkungan siap kompilasi:
+- **`esp32dev_analog`** (Default): Menggunakan input sensor fisik riil ([src/ExampleAnalog.cpp](file:///d:/Github/ESP-SeedLink/src/ExampleAnalog.cpp)).
+- **`esp32dev`**: Menggunakan generator gelombang gempa sintetis ([src/Example.cpp](file:///d:/Github/ESP-SeedLink/src/Example.cpp)).
 
 ```powershell
-# Kompilasi firmware
-pio run
+# Kompilasi firmware input Analog (Default)
+pio run -e esp32dev_analog
+
+# Atau kompilasi firmware Dummy Sintetis
+pio run -e esp32dev
 
 # Unggah firmware ke perangkat ESP32 fisik (pastikan kabel USB terpasang)
-pio run -t upload
+pio run -e esp32dev_analog -t upload
 
 # Buka Serial Monitor (kecepatan baud 115200)
 pio device monitor -b 115200

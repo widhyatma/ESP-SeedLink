@@ -1,7 +1,76 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <time.h>
-#include "config.h"
+
+// ==============================================================================
+// 1. KONFIGURASI JARINGAN (SINGLE WI-FI & SOFTAP FALLBACK)
+// ==============================================================================
+// Ganti dengan SSID dan Password Wi-Fi router Anda (Single Wi-Fi)
+const char* const WIFI_SSID       = "JERUKAGUNG SEISMOLOGI"; //Nama SSID
+const char* const WIFI_PASS       = "JERIS6467"; //Password SSID
+
+// Parameter SoftAP Darurat (Aktif otomatis jika Wi-Fi di atas gagal terhubung)
+#define AP_SSID                   "ESP32-SEISMOMETER"
+#define AP_PASSWORD               "seismo1234"
+
+// ==============================================================================
+// 2. KONFIGURASI SEEDLINK SERVER & METADATA STASIUN (FDSN STANDARD)
+// ==============================================================================
+#define SEEDLINK_PORT             18000       // Standar port FDSN SeedLink
+
+// Metadata Stasiun Seismologi
+#define STATION_CODE              "JERIS"     // Kode stasiun (maks 5 karakter)
+#define STATION_NAME              "Jerukagung Seismologi"
+#define NETWORK_CODE              "AM"        // Kode network (2 karakter, AM = Citizen Science / Raspberry Shake)
+#define LOCATION_CODE             "00"        // Kode lokasi (2 karakter, "00" = primary sensor)
+#define CHANNEL_CODE              "EHZ"       // Saluran default
+
+// Definisi 9 Saluran Multi-Rate FDSN: E (100 Hz), B (50 Hz), S (50 Hz)
+// Komponen Triaksial: Z (Vertical), N (North-South), E (East-West)
+struct ChannelMeta {
+    const char* code;          // e.g. "EHZ"
+    const char* location;      // e.g. "00"
+    char band;                 // 'E', 'B', 'S'
+    char orientation;          // 'Z', 'N', 'E'
+    uint16_t sampleRate;       // 100 Hz (E) atau 50 Hz (B, S)
+    uint16_t samplesPerRecord; // 100 (E) atau 50 (B, S) -> 1.0 detik per paket
+};
+
+const ChannelMeta AVAILABLE_CHANNELS[] = {
+    {"EHZ", "00", 'E', 'Z', 100, 100},
+    {"EHN", "00", 'E', 'N', 100, 100},
+    {"EHE", "00", 'E', 'E', 100, 100},
+    {"BHZ", "00", 'B', 'Z', 50,  50},
+    {"BHN", "00", 'B', 'N', 50,  50},
+    {"BHE", "00", 'B', 'E', 50,  50},
+    {"SHZ", "00", 'S', 'Z', 50,  50},
+    {"SHN", "00", 'S', 'N', 50,  50},
+    {"SHE", "00", 'S', 'E', 50,  50}
+};
+const size_t NUM_CHANNELS = sizeof(AVAILABLE_CHANNELS) / sizeof(AVAILABLE_CHANNELS[0]);
+
+// Konfigurasi Sampling Rate Master
+#define MASTER_SAMPLING_RATE_HZ   100         // Master loop tick pada 100 Hz (10,000 us)
+#define SAMPLING_RATE_HZ          100         // Kompatibilitas alias
+#define MAX_SAMPLES_PER_RECORD    100         // Maksimum buffer per channel (100 sampel)
+#define SAMPLES_PER_RECORD        100         // Kompatibilitas alias
+
+// Konfigurasi SNTP Server (Presisi waktu UTC untuk BTIME MiniSEED)
+#define NTP_SERVER_1              "pool.ntp.org"
+#define NTP_SERVER_2              "time.nist.gov"
+#define NTP_SERVER_3              "id.pool.ntp.org"
+#define GMT_OFFSET_SEC            0           // SeedLink / MiniSEED mewajibkan UTC (GMT+0)
+#define DAYLIGHT_OFFSET_SEC       0
+
+// Konfigurasi Generator Sinyal Seismik Dummy
+#define SEISMIC_NOISE_STD_DEV     120         // Standar deviasi background noise alami (+/- 150 s/d +/- 250 counts)
+#define ENABLE_AUTO_QUAKE         false       // false = sinyal natural kontinu; true = gempa periodik
+#define EARTHQUAKE_PERIOD_SEC     300         // Interval simulasi gempa otomatis jika diaktifkan (detik)
+#define QUAKE_MAX_AMPLITUDE       1800        // Amplitudo puncak gempa wajar (counts, tidak over-clip)
+
+// ==============================================================================
+// 3. HEADER ENGINE SEEDLINK & SENSOR
+// ==============================================================================
 #include "miniseed.h"
 #include "synthetic_sensor.h"
 #include "seedlink_server.h"
@@ -23,6 +92,10 @@ bool ntpSynced = false;
 const time_t FALLBACK_EPOCH = 1767225600;
 uint32_t bootMillis = 0;
 
+// ==============================================================================
+// 4. IMPLEMENTASI WAKTU UTC & KONEKSI SINGLE WI-FI
+// ==============================================================================
+
 time_t getCurrentUtcTime(uint32_t* outMicros) {
     if (outMicros) {
         *outMicros = micros();
@@ -39,39 +112,26 @@ time_t getCurrentUtcTime(uint32_t* outMicros) {
 }
 
 void setupWiFi() {
-    Serial.println("\n[WIFI] Memulai koneksi Wi-Fi (Multi-AP Prioritas)...");
+    Serial.println("\n[WIFI] Memulai koneksi Wi-Fi (Single Wi-Fi)...");
+    Serial.printf("[WIFI] Menghubungkan ke SSID: \"%s\"...\n", WIFI_SSID);
+
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(false); // Nonaktifkan Modem Sleep agar radio Wi-Fi 100% aktif (mencegah lag / jitter)
     WiFi.setAutoReconnect(true);
 
-    bool connected = false;
-    for (size_t i = 0; i < NUM_WIFI_NETWORKS; ++i) {
-        Serial.printf("[WIFI] [%u/%u] Mencoba koneksi ke: \"%s\"...\n", 
-                      (unsigned int)(i + 1), (unsigned int)NUM_WIFI_NETWORKS, WIFI_SSID[i]);
-        
-        WiFi.begin(WIFI_SSID[i], WIFI_PASS[i]);
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 24) { // ~12 detik per AP
-            delay(500);
-            Serial.print(".");
-            attempts++;
-        }
-        Serial.println();
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-        if (WiFi.status() == WL_CONNECTED) {
-            connected = true;
-            Serial.printf("[WIFI] Berhasil terhubung ke: \"%s\" (Prioritas #%u)\n", 
-                          WIFI_SSID[i], (unsigned int)(i + 1));
-            break;
-        } else {
-            Serial.printf("[WIFI] Gagal terhubung ke \"%s\". Mencoba cadangan berikutnya...\n", WIFI_SSID[i]);
-            WiFi.disconnect(true);
-            delay(100);
-        }
+    // Tunggu koneksi hingga ~15 detik (30 iterasi x 500 ms)
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
     }
+    Serial.println();
 
-    if (connected && WiFi.status() == WL_CONNECTED) {
-        Serial.println("[WIFI] Status Jaringan Aktif:");
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("[WIFI] Berhasil terhubung ke Wi-Fi!");
         Serial.printf("[WIFI] SSID Terhubung: %s\n", WiFi.SSID().c_str());
         Serial.printf("[WIFI] IP Address     : %s\n", WiFi.localIP().toString().c_str());
         Serial.printf("[WIFI] Subnet Mask    : %s\n", WiFi.subnetMask().toString().c_str());
@@ -104,8 +164,9 @@ void setupWiFi() {
             Serial.println("[NTP] Peringatan: NTP belum merespon. Menggunakan fallback timestamp.");
         }
     } else {
-        // Fallback: Aktifkan Access Point Mode (SoftAP) jika semua Wi-Fi cadangan gagal
-        Serial.println("[WIFI] Semua Wi-Fi cadangan gagal terhubung. Mengaktifkan Access Point (SoftAP)...");
+        // Fallback: Aktifkan Access Point Mode (SoftAP) jika Wi-Fi gagal terhubung
+        Serial.println("[WIFI] Gagal terhubung ke router. Mengaktifkan Access Point darurat (SoftAP)...");
+        WiFi.disconnect(true);
         WiFi.mode(WIFI_AP);
         WiFi.softAP(AP_SSID, AP_PASSWORD);
         IPAddress apIP = WiFi.softAPIP();
@@ -122,6 +183,7 @@ void printBanner() {
     Serial.println("========================================================");
     Serial.printf(" Station ID    : %s (%s)\n", STATION_CODE, STATION_NAME);
     Serial.printf(" Network ID    : %s\n", NETWORK_CODE);
+    Serial.printf(" Wi-Fi Target  : %s (Single Wi-Fi)\n", WIFI_SSID);
     Serial.printf(" Total Channels: %u FDSN Channels (E, B, S)\n", (unsigned int)NUM_CHANNELS);
     Serial.println(" Saluran Aktif : EHZ (100Hz), EHN (100Hz), EHE (100Hz),");
     Serial.println("                 BHZ (50Hz),  BHN (50Hz),  BHE (50Hz),");
@@ -130,7 +192,7 @@ void printBanner() {
     Serial.println(" Packet Record : 1.0 detik per saluran (100 smpl @ 100Hz, 50 smpl @ 50Hz)");
     Serial.printf(" SeedLink Port : %d\n", SEEDLINK_PORT);
     Serial.println("--------------------------------------------------------");
-    Serial.println(" Perintah Serial:");
+    Serial.println(" Perintah Serial Monitor:");
     Serial.println("   'q' atau 'Q' -> Memicu simulasi gempa bumi triaksial (Z, N, E)");
     Serial.println("   's' atau 'S' -> Menampilkan status stasiun & server");
     Serial.println("========================================================\n");
@@ -143,7 +205,7 @@ void setup() {
 
     printBanner();
 
-    // Inisialisasi Jaringan
+    // Inisialisasi Jaringan (Single Wi-Fi + SoftAP fallback)
     setupWiFi();
 
     // Jalankan SeedLink TCP Server

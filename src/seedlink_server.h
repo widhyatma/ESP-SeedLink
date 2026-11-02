@@ -2,7 +2,9 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#if __has_include("config.h")
 #include "config.h"
+#endif
 #include "miniseed.h"
 
 #define MAX_SL_CLIENTS 16

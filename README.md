@@ -39,7 +39,8 @@ SEISMOMETER/
 │   ├── seedlink_server.h        # State machine TCP server SeedLink v3.1
 │   └── synthetic_sensor.h       # Generator gelombang gempa sintetis
 ├── src/
-│   └── main.cpp                 # Entry point firmware ESP32
+│   ├── Example.cpp              # Entry point simulasi dummy sintetis (P, S, Coda, Microseism)
+│   └── ExampleAnalog.cpp        # Entry point input sensor analog ADC riil (Geophone / Accelerometer)
 ├── tools/
 │   ├── seedlink_test_client.py  # Client pemantau live stream terminal
 │   ├── seedlink_mock_server.py  # Server mock untuk testing di PC
@@ -90,13 +91,16 @@ const char* const WIFI_PASS[] = {
 Pastikan PlatformIO CLI atau ekstensi PlatformIO IDE di VS Code terpasang:
 
 ```powershell
-# Kompilasi firmware
-pio run
+# Kompilasi mode Analog Sensor ADC riil (Default):
+pio run -e esp32dev_analog
 
-# Flash ke ESP32 (hubungkan kabel USB)
-pio run -t upload
+# Atau kompilasi mode Dummy Sintetis:
+pio run -e esp32dev
 
-# Buka Serial Monitor (115200 baud)
+# Flash ke ESP32 (hubungkan kabel USB):
+pio run -e esp32dev_analog -t upload
+
+# Buka Serial Monitor (115200 baud):
 pio device monitor -b 115200
 ```
 

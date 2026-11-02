@@ -2,7 +2,22 @@
 
 #include <Arduino.h>
 #include <lwip/def.h>  // Untuk htons, htonl
+#if __has_include("config.h")
 #include "config.h"
+#endif
+
+#ifndef STATION_CODE
+#define STATION_CODE "JERIS"
+#endif
+#ifndef CHANNEL_CODE
+#define CHANNEL_CODE "EHZ"
+#endif
+#ifndef LOCATION_CODE
+#define LOCATION_CODE "00"
+#endif
+#ifndef NETWORK_CODE
+#define NETWORK_CODE "AM"
+#endif
 
 // Standard MiniSEED record size (512 bytes)
 #define MINISEED_RECORD_SIZE    512
