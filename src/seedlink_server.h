@@ -420,14 +420,27 @@ public:
                 for (int i = 0; i < MAX_SL_CLIENTS; ++i) {
                     if (_clients[i] && _clients[i].connected() && _clientStates[i] == SL_STATE_STREAMING) {
                         if ((_clientChannelMasks[i] & (1 << chIdx)) != 0) {
-                            // Penulisan non-blocking langsung ke ring buffer LwIP (jangan gunakan flush() karena memblokir CPU menunggu ACK)
-                            size_t written = _clients[i].write(_packetBuffer, SEEDLINK_PACKET_SIZE);
-                            if (written != SEEDLINK_PACKET_SIZE) {
-                                Serial.printf("[SEEDLINK] Write error ke klien #%d (%u/520). Menutup socket.\n",
-                                              i, (unsigned int)written);
+                            // Penulisan aman dengan toleransi retry singkat jika buffer TCP LwIP sedang padat (mencegah putus soket semu)
+                            size_t totalWritten = 0;
+                            int retryCount = 0;
+                            while (totalWritten < SEEDLINK_PACKET_SIZE && retryCount < 4) {
+                                size_t w = _clients[i].write(_packetBuffer + totalWritten, SEEDLINK_PACKET_SIZE - totalWritten);
+                                if (w > 0) {
+                                    totalWritten += w;
+                                } else {
+                                    delayMicroseconds(400); // Beri jeda 400 us agar LwIP mengosongkan buffer send
+                                    retryCount++;
+                                }
+                            }
+
+                            if (totalWritten != SEEDLINK_PACKET_SIZE) {
+                                Serial.printf("[SEEDLINK] Write timeout ke klien #%d (%u/520). Menutup socket.\n",
+                                              i, (unsigned int)totalWritten);
                                 _clients[i].stop();
                                 _clientStates[i] = SL_STATE_DISCONNECTED;
                                 _clientChannelMasks[i] = 0;
+                            } else {
+                                delayMicroseconds(200); // Staggering mikroskopis antar paket saluran
                             }
                         }
                     }

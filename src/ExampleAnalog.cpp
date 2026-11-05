@@ -78,11 +78,14 @@ const size_t NUM_CHANNELS = sizeof(AVAILABLE_CHANNELS) / sizeof(AVAILABLE_CHANNE
 #define ANALOG_PIN_N              39  // GPIO39 / VN / A3 (Komponen Horisontal Utara - N)
 #define ANALOG_PIN_E              34  // GPIO34 / A6      (Komponen Horisontal Timur - E)
 
-// true jika hanya 1 sensor geophone vertikal Z; false jika triaksial (Z, N, E)
-#define SINGLE_AXIS_VERTICAL      false
+// true jika hanya memasang 1 sensor geophone vertikal Z (SANGAT DIREKOMENDASIKAN jika hanya 1 sensor
+// agar CPU tidak membuang waktu membaca pin N dan E yang mengambang/floating)
+// false jika menggunakan 3 sensor triaksial lengkap (Z, N, E)
+#define SINGLE_AXIS_VERTICAL      true
 
-// Oversampling & Scaling
-#define ADC_OVERSAMPLE_COUNT      16
+// Oversampling ADC: 2x sudah sangat optimal untuk ESP32 (waktu konversi ~80 us vs ~2.4 ms pada 16x)
+// Mengurangi oversampling ke 2x secara drastis melenyapkan lag/jeda transmisi paket SeedLink!
+#define ADC_OVERSAMPLE_COUNT      2
 #define ANALOG_GAIN_MULTIPLIER    16
 
 // Filter DC-Blocker rekursif: y[n] = x[n] - x[n-1] + R * y[n-1] (fc ≈ 0.05 Hz)
@@ -301,6 +304,9 @@ void loop() {
     uint32_t currentMicros = micros();
 
     int catchUpCount = 0;
+    int32_t sampleZ = 0, sampleN = 0, sampleE = 0;
+    bool adcSampleRead = false;
+
     while ((currentMicros - lastSampleMicros) >= MASTER_TICK_MICROS && catchUpCount < 10) {
         lastSampleMicros += MASTER_TICK_MICROS;
         tickCount++;
@@ -309,8 +315,11 @@ void loop() {
         uint32_t usOffset = 0;
         time_t utcSec = getCurrentUtcTime(&usOffset);
 
-        int32_t sampleZ = 0, sampleN = 0, sampleE = 0;
-        readAnalogSensors(sampleZ, sampleN, sampleE);
+        // Baca konversi ADC hanya sekali per siklus loop utama (mencegah beban berulang saat catch-up)
+        if (!adcSampleRead) {
+            readAnalogSensors(sampleZ, sampleN, sampleE);
+            adcSampleRead = true;
+        }
 
         // (a) Band E (100 Hz): disampel setiap tick
         seedlinkServer.addChannelSample(0, sampleZ, utcSec, usOffset); // EHZ
